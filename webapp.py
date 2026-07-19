@@ -1,10 +1,10 @@
 import cv2
 import numpy as np
 import socket
-import struct
 import time
 import os
 import random
+import threading
 from flask import Flask, render_template_string, Response
 from flask_socketio import SocketIO
 
@@ -20,16 +20,87 @@ except ImportError:
     USING_REAL_SDK = False
     print("[!] Warning: 'smartspectra' library not found. Launching local rPPG emulation engine.")
 
-#network
-QNX_PI_IP = "192.168.1.50"  # Target IP of QNX Pi
-QNX_PORT = 5000
+#network — laptop LISTENS; QNX Pi SENDS IMU here (see imu_test.c)
+IMU_UDP_PORT = 5000
 
-try:
-    qnx_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    print(f"[*] UDP Socket initialized. Routing telemetry to QNX Pi at {QNX_PI_IP}:{QNX_PORT}")
-except Exception as e:
-    print(f"[!] Warning: Network socket binding failed: {e}")
-    qnx_sock = None
+imu_breathing_rate = 0.0
+imu_position = 0
+imu_apnea = 0
+imu_last_rx = 0.0
+imu_line = "waiting for Pi IMU…"
+imu_seq = 0
+imu_sock = None
+
+POS_NAMES = {
+    0: "BACK (safe)",
+    1: "STOMACH - WARNING",
+    2: "LEFT SIDE - caution",
+    3: "RIGHT SIDE - caution",
+    4: "unknown/transitional",
+}
+
+def format_imu_line(breath, pos, apnea=0):
+    name = POS_NAMES.get(int(pos), "unknown/transitional")
+    line = f"{name} | breath {breath:.0f}/min"
+    if apnea:
+        line += " | APNEA"
+    return line
+
+def _local_ips():
+    ips = []
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ips.append(s.getsockname()[0])
+        s.close()
+    except OSError:
+        pass
+    return ips
+
+def imu_receiver_loop():
+    """Background thread: always listen for Pi, even if camera is down."""
+    global imu_sock, imu_breathing_rate, imu_position, imu_apnea
+    global imu_last_rx, imu_line, imu_seq, heart_rate, breathing_rate
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind(("0.0.0.0", IMU_UDP_PORT))
+    except OSError as e:
+        print(f"[!] Cannot bind UDP {IMU_UDP_PORT}: {e}")
+        print("    Is another webapp/imu_listen.py already running?")
+        return
+
+    imu_sock = sock
+    ips = _local_ips()
+    print(f"[*] IMU UDP listening on 0.0.0.0:{IMU_UDP_PORT}")
+    if ips:
+        print(f"[*] On the Pi run:  ./imu_test {ips[0]}")
+    print("[*] Waiting for packets…\n")
+
+    while True:
+        try:
+            data, addr = sock.recvfrom(256)
+        except OSError:
+            break
+        raw = data.decode("utf-8", errors="ignore").strip()
+        if not raw.startswith("IMU,"):
+            continue
+        try:
+            parts = dict(
+                p.split("=", 1) for p in raw.split(",")[1:] if "=" in p
+            )
+            imu_breathing_rate = float(parts.get("breath", 0))
+            imu_position = int(parts.get("pos", 4))
+            imu_apnea = int(parts.get("apnea", 0))
+            imu_last_rx = time.time()
+            imu_line = format_imu_line(imu_breathing_rate, imu_position, imu_apnea)
+            imu_seq += 1
+            breathing_rate = imu_breathing_rate
+            print(f"← {addr[0]}  {imu_line}", flush=True)
+            # UI is updated via /api/imu polling (more reliable than thread emit)
+        except (ValueError, TypeError) as e:
+            print(f"[!] bad packet from {addr}: {raw!r} ({e})")
 
 # OpenCV Native Face Detection (used as a lightweight zero-dependency tracker)
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
@@ -149,41 +220,57 @@ def process_vitals(frame):
 
 def generate_frames():
     """Generates JPEG frame buffers and emits extracted telemetries."""
+    global heart_rate, breathing_rate
     while True:
         success, frame = camera.read()
         if not success:
-            break
-        
-        # Mirror frame horizontally for a natural layout display
+            # Camera missing — still push vitals so UI isn't stuck on "--"
+            time.sleep(0.5)
+            imu_fresh = (time.time() - imu_last_rx) < 3.0
+            br = imu_breathing_rate if imu_fresh and imu_breathing_rate > 0 else 0
+            socketio.emit("vitals_update", {
+                "heart_rate": "--",
+                "breathing_rate": round(br, 1) if br else "--",
+                "status": "NO_CAMERA",
+                "imu_position": imu_position,
+                "imu_line": imu_line if imu_fresh else "waiting for Pi IMU…",
+                "imu_seq": imu_seq,
+            })
+            continue
+
         frame = cv2.flip(frame, 1)
-        
-        # Draw tech HUD identifiers
         cv2.putText(frame, "PRESAGE OPTO-ELECTRONIC CAPTURE", (20, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (138, 153, 173), 1)
-        
-        # Run live processing
+
         hr, br = process_vitals(frame)
-        
-        # 1. Stream vital packet updates to QNX Pi over UDP
-        if qnx_sock:
-            try:
-                packet = struct.pack("!ff", float(hr), float(br))
-                qnx_sock.sendto(packet, (QNX_PI_IP, QNX_PORT))
-            except Exception:
-                pass # Continue running safely if board is disconnected
-                
-        # 2. Emit data package to connected dashboard browsers
-        socketio.emit('vitals_update', {
-            'heart_rate': round(hr, 1),
-            'breathing_rate': round(br, 1),
-            'status': "NORMAL" if hr > 0 else "DISCONNECTED"
+        heart_rate = hr
+
+        imu_fresh = (time.time() - imu_last_rx) < 3.0
+        if imu_fresh and imu_breathing_rate > 0:
+            br = imu_breathing_rate
+        breathing_rate = br
+
+        status = "NORMAL"
+        if imu_apnea:
+            status = "APNEA"
+        elif hr <= 0:
+            status = "DISCONNECTED"
+
+        display_line = imu_line if imu_fresh else "waiting for Pi IMU…"
+
+        socketio.emit("vitals_update", {
+            "heart_rate": round(hr, 1),
+            "breathing_rate": round(br, 1),
+            "status": status,
+            "imu_position": imu_position,
+            "imu_line": display_line,
+            "imu_seq": imu_seq,
         })
-        
-        # Compress and encode frame for MJPEG stream
-        ret, buffer = cv2.imencode('.jpg', frame)
+
+        ret, buffer = cv2.imencode(".jpg", frame)
         frame_bytes = buffer.tobytes()
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+        yield (b"--frame\r\n"
+               b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n")
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -222,6 +309,31 @@ HTML_TEMPLATE = """
             --shadow-card: 0 10px 30px rgba(75,63,78,0.08);
             --radius-lg: 26px;
             --radius-md: 18px;
+        }
+
+        .imu-log-card {
+            background: var(--card);
+            border: 1px solid var(--card-line);
+            border-radius: var(--radius-md);
+            box-shadow: var(--shadow-card);
+            padding: 14px 16px;
+            margin-top: 12px;
+        }
+        .imu-log-title {
+            font-family: var(--font-display);
+            font-size: 0.95rem;
+            color: var(--ink-soft);
+            margin-bottom: 8px;
+        }
+        .imu-log {
+            margin: 0;
+            max-height: 220px;
+            overflow-y: auto;
+            font-family: var(--font-mono);
+            font-size: 0.82rem;
+            line-height: 1.45;
+            color: var(--ink);
+            white-space: pre-wrap;
         }
 
         body.night {
@@ -473,7 +585,12 @@ HTML_TEMPLATE = """
             </div>
 
             <div class="alert-panel" id="safety-alert">
-                QNX CORE PILOT: SYSTEM STEADY
+                waiting for Pi IMU…
+            </div>
+
+            <div class="imu-log-card">
+                <div class="imu-log-title">IMU live (from QNX Pi)</div>
+                <pre class="imu-log" id="imu-log"></pre>
             </div>
         </section>
     </div>
@@ -530,21 +647,51 @@ HTML_TEMPLATE = """
             ctx.stroke();
         }
 
-        // Live Vital Updates from Flask Server
+        // Live Vital Updates from Flask Server (camera path)
         socket.on('vitals_update', function(data) {
-            document.getElementById('hero-hr').innerText = data.heart_rate;
-            document.getElementById('hero-br').innerText = data.breathing_rate;
-            document.getElementById('val-hr').innerText = data.heart_rate;
-            document.getElementById('val-br').innerText = data.breathing_rate;
+            applyVitals(data);
+        });
 
-            hrBuffer.push(data.heart_rate);
-            hrBuffer.shift();
-            brBuffer.push(data.breathing_rate);
-            brBuffer.shift();
+        function applyVitals(data) {
+            if (data.heart_rate != null && data.heart_rate !== '')
+                document.getElementById('hero-hr').innerText = data.heart_rate;
+            if (data.breathing_rate != null && data.breathing_rate !== '') {
+                document.getElementById('hero-br').innerText = data.breathing_rate;
+                document.getElementById('val-br').innerText = data.breathing_rate;
+            }
+            if (data.heart_rate != null && data.heart_rate !== '')
+                document.getElementById('val-hr').innerText = data.heart_rate;
 
+            const line = data.imu_line || 'waiting for Pi IMU…';
+            document.getElementById('safety-alert').innerText = line;
+
+            const log = document.getElementById('imu-log');
+            if (log && data.imu_seq != null && data.imu_seq !== Number(log.dataset.seq || -1)) {
+                log.dataset.seq = data.imu_seq;
+                log.textContent += line + '\n';
+                log.scrollTop = log.scrollHeight;
+                const lines = log.textContent.trim().split('\n');
+                if (lines.length > 40) {
+                    log.textContent = lines.slice(-40).join('\n') + '\n';
+                }
+            }
+
+            const hr = Number(data.heart_rate);
+            const br = Number(data.breathing_rate);
+            if (!Number.isNaN(hr)) { hrBuffer.push(hr); hrBuffer.shift(); }
+            if (!Number.isNaN(br)) { brBuffer.push(br); brBuffer.shift(); }
             drawSparkline('chart-hr', hrBuffer, '#FF93B0');
             drawSparkline('chart-br', brBuffer, '#6FCBE8');
-        });
+        }
+
+        // Poll /api/imu every 500ms — reliable path from Pi UDP → page
+        setInterval(async () => {
+            try {
+                const r = await fetch('/api/imu');
+                const data = await r.json();
+                applyVitals(data);
+            } catch (e) { /* ignore */ }
+        }, 500);
     </script>
 </body>
 </html>
@@ -554,9 +701,28 @@ HTML_TEMPLATE = """
 def index():
     return render_template_string(HTML_TEMPLATE)
 
+@app.route('/api/imu')
+def api_imu():
+    """Browser polls this — works even when Socket.IO thread emit fails."""
+    fresh = (time.time() - imu_last_rx) < 3.0
+    return {
+        "ok": True,
+        "fresh": fresh,
+        "imu_line": imu_line if fresh else "waiting for Pi IMU…",
+        "breathing_rate": round(imu_breathing_rate, 1) if fresh else None,
+        "heart_rate": round(heart_rate, 1) if heart_rate else None,
+        "imu_position": imu_position,
+        "imu_seq": imu_seq,
+        "apnea": bool(imu_apnea),
+        "age_s": round(time.time() - imu_last_rx, 1) if imu_last_rx else None,
+    }
+
 @app.route('/video_feed')
 def video_feed():
     return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 if __name__ == '__main__':
-    socketio.run(app, debug=True, port=8080)
+    t = threading.Thread(target=imu_receiver_loop, daemon=True)
+    t.start()
+    # reloader off so we don't bind UDP twice
+    socketio.run(app, host="0.0.0.0", debug=False, port=8080, allow_unsafe_werkzeug=True)

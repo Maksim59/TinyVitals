@@ -14,20 +14,14 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-/*
- * TinyVitals — runs entirely on the QNX Pi.
- * Reads IMU, serves a local HTML dashboard.
- *
- * How to SEE it (Pi is headless — your laptop is just the screen):
- *   1) Same Wi‑Fi / hotspot as the Pi
- *   2) On Pi:  ifconfig   (note the inet address, e.g. 172.20.10.5)
- *   3) On laptop browser:  http://172.20.10.5:8080
- */
-
 #define I2C_DEV     "/dev/i2c1"
 #define IMU_ADDR    0x6A
 #define ACCEL_SENS  0.000061
 #define HTTP_PORT   8080
+
+// --- NETWORK PIPELINE TARGET DEFINITION ---
+#define FLASK_SERVER_IP  "192.168.137.9" //
+#define OUTBOUND_UDP_PORT 5001
 
 #define SAMPLE_HZ           25.0
 #define BREATH_MIN_BPM      8.0
@@ -38,6 +32,13 @@
 #define REFRACTORY_SEC      (60.0 / BREATH_MAX_BPM)
 #define BREATH_MIN_AMP_G    0.012
 #define HIST_LEN            64
+
+/* Fixed 12-byte binary structure matching Python unpack expectations */
+typedef struct {
+    float pitch;
+    float roll;
+    float yaw;
+} IMUTelemetry;
 
 typedef enum {
     POS_BACK, POS_STOMACH, POS_LEFT_SIDE, POS_RIGHT_SIDE, POS_UNKNOWN
@@ -254,7 +255,6 @@ static void build_json(char *out, size_t outsz) {
         g_apnea ? " | APNEA" : "");
 }
 
-/* Embedded dashboard — no Python, no files on disk */
 static const char *PAGE_HTML =
 "<!DOCTYPE html>\n"
 "<html lang=\"en\">\n"
@@ -390,6 +390,14 @@ int main(void) {
         return 1;
     }
 
+    // --- INITIALIZE OUTBOUND UDP SOCKET FOR FLASK LINK ---
+    int udp_sock = socket(AF_INET, SOCK_DGRAM, 0);
+    struct sockaddr_in flask_addr;
+    memset(&flask_addr, 0, sizeof(flask_addr));
+    flask_addr.sin_family = AF_INET;
+    flask_addr.sin_port = htons(OUTBOUND_UDP_PORT);
+    inet_pton(AF_INET, FLASK_SERVER_IP, &flask_addr.sin_addr);
+
     struct { i2c_sendrecv_t hdr; uint8_t data[1]; } who;
     memset(&who, 0, sizeof(who));
     who.hdr.slave.addr = IMU_ADDR;
@@ -430,7 +438,7 @@ int main(void) {
     printf("\nTinyVitals dashboard on THIS Pi\n");
     printf("  Open on your laptop browser:\n");
     printf("    http://<PI_IP>:%d\n", HTTP_PORT);
-    printf("  Find PI_IP with:  ifconfig\n");
+    printf("  Streaming raw angles to Flask Server at %s:%d\n", FLASK_SERVER_IP, OUTBOUND_UDP_PORT);
     printf("Ctrl+C to stop.\n\n");
 
     while (1) {
@@ -465,11 +473,24 @@ int main(void) {
         g_apnea = apnea;
         g_y_sig = breath_sig;
 
+        // --- COMPUTE AND SEND SPATIAL IMU ANGLES TO WEBAPP ---
+        // Pitch/Roll computed directly from gravity components
+        float pitch_deg = (float)(atan2(-ax, sqrt(ay*ay + az*az)) * 180.0 / M_PI);
+        float roll_deg  = (float)(atan2(ay, az) * 180.0 / M_PI);
+        float yaw_deg   = 0.0f; // Standard 6-axis accelerometers lack absolute heading anchors
+
+        IMUTelemetry packet;
+        packet.pitch = pitch_deg;
+        packet.roll = roll_deg;
+        packet.yaw = yaw_deg;
+
+        sendto(udp_sock, &packet, sizeof(packet), 0, (struct sockaddr *)&flask_addr, sizeof(flask_addr));
+
         static double last_print = 0.0;
         if (t - last_print >= 0.5 || got) {
             last_print = t;
-            printf("%s | breath %.0f/min | y_sig=%+.3f%s\n",
-                   position_name(pos), det.bpm, breath_sig,
+            printf("%s | breath %.0f/min | Pitch:%+5.1f Roll:%+5.1f%s\n",
+                   position_name(pos), det.bpm, pitch_deg, roll_deg,
                    got ? "  *breath*" : "");
         }
 
@@ -495,6 +516,7 @@ int main(void) {
             usleep((useconds_t)(sleep_s * 1e6));
     }
 
+    close(udp_sock);
     close(http_fd);
     close(g_fd);
     return 0;
