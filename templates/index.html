@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>TinyVitals - Baby Care Companion</title>
+    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght=400;500;600;700;800&family=JetBrains+Mono:wght=400;500;600&display=swap" rel="stylesheet">
+     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+        
+    <!-- Other scripts and fonts can go below -->
+    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+    </head>
+</head>
+<body>
+    <div class="app-shell">
+
+        <div class="app-topbar">
+            <div class="brand">
+                <span class="brand-name">TinyVitals</span>
+                <span class="brand-sub" id="elapsed-sub">SESSION 00:00</span>
+            </div>
+            <div class="topbar-actions">
+                <button class="icon-toggle" id="voice-toggle" title="Toggle voice alerts">🔊</button>
+                <button class="icon-toggle" id="mode-toggle" title="Toggle day mode">🌙</button>
+            </div>
+        </div>
+
+        <section class="tab-panel active" id="tab-home">
+            <div class="hero-card">
+                <div class="hero-inner">
+                    <div class="hero-top">
+                        <svg class="hero-avatar" viewBox="0 0 64 64" fill="none">
+                            <g class="breathe">
+                                <circle cx="32" cy="32" r="28" fill="#FFFFFF"/>
+                                <circle cx="32" cy="32" r="28" fill="#FFD9E6" opacity="0.4"/>
+                                <path d="M22 30q2-3 5 0" stroke="#4B3F4E" stroke-width="2" stroke-linecap="round" fill="none"/>
+                                <path d="M37 30q2-3 5 0" stroke="#4B3F4E" stroke-width="2" stroke-linecap="round" fill="none"/>
+                                <path d="M26 40q6 5 12 0" stroke="#4B3F4E" stroke-width="2" stroke-linecap="round" fill="none"/>
+                                <circle cx="20" cy="37" r="2.5" fill="#FFB8C6" opacity="0.8"/>
+                                <circle cx="44" cy="37" r="2.5" fill="#FFB8C6" opacity="0.8"/>
+                            </g>
+                        </svg>
+                        <div>
+                            <div class="hero-status-label">Right now</div>
+                            <div class="hero-status-pill status-pill" id="hero-status-pill"><span class="dot"></span><span id="hero-status-text">Establishing Baseline</span></div>
+                        </div>
+                    </div>
+                    <div class="hero-quickrow">
+                        <div class="quick-bubble qb-hr"><div class="qb-label">Heart Rate</div><div class="qb-value"><span id="hr-val-echo">--</span> <span class="qb-unit">bpm</span></div></div>
+                        <div class="quick-bubble qb-br"><div class="qb-label">Breathing</div><div class="qb-value"><span id="br-val-echo">--</span> <span class="qb-unit">brpm</span></div></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="cam-card">
+                <div class="cam-card-header"><span class="cam-title">Nursery Cam</span><span class="cam-badge">525NM RPPG</span></div>
+                <div class="video-container">
+                    <div class="system-status-tag" id="status-tag">System Active</div>
+                    <div class="ai-face-tag" id="ai-face-tag">AI: Calibrating</div>
+                    <img id="video-feed-img" src="/video_feed" alt="Live Feed">
+                </div>
+                <div class="mood-strip">
+                    <span class="mood-emoji" id="mood-emoji"></span>
+                    <div class="mood-text"><span class="mood-label">Mood Check</span><span class="mood-value" id="ai-stress-label">no face</span></div>
+                    <div class="ai-bar-track"><div class="ai-bar-fill" id="ai-bar-fill"></div></div>
+                </div>
+            </div>
+
+            <div class="position-card" id="position-card">
+                <div class="position-header"><span class="position-title">Position & Incline</span><span class="trend-badge" id="position-badge">tracking</span></div>
+                <div class="position-grid">
+                    <div class="position-block">
+                        <div class="position-block-label">Sleep Position</div>
+                        <div class="position-block-value" id="position-label">Calibrating</div>
+                        <div class="position-block-sub" id="position-time">00:00 in position</div>
+                    </div>
+                    <div class="position-block">
+                        <div class="position-block-label">Mattress Incline</div>
+                        <div class="position-block-value" id="incline-val">--°</div>
+                        <div class="incline-bar-track"><div class="incline-bar-fill" id="incline-bar"></div></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="vitals-grid">
+                <div class="metric-card hr-card" id="hr-card">
+                    <div class="metric-label"><span>Heart Rate</span><span class="trend-badge" id="hr-trend">--</span></div>
+                    <div class="metric-value-group"><span class="metric-value" id="hr-val">--</span><span class="metric-unit">bpm</span></div>
+                    <canvas id="hr-chart"></canvas>
+                    <div class="stat-row"><span>Min <b id="hr-min">--</b></span><span>Avg <b id="hr-avg">--</b></span><span>Max <b id="hr-max">--</b></span></div>
+                </div>
+                <div class="metric-card br-card" id="br-card">
+                    <div class="metric-label"><span>Breathing</span><span class="trend-badge" id="br-trend">--</span></div>
+                    <div class="metric-value-group"><span class="metric-value" id="br-val">--</span><span class="metric-unit">brpm</span></div>
+                    <canvas id="br-chart"></canvas>
+                    <div class="stat-row"><span>Min <b id="br-min">--</b></span><span>Avg <b id="br-avg">--</b></span><span>Max <b id="br-max">--</b></span></div>
+                </div>
+            </div>
+
+            <div class="alert-panel" id="alert-box">QNX LINK: STEADY</div>
+        </section>
+
+        <section class="tab-panel" id="tab-insights">
+            <div class="insight-card">
+                <div class="insight-card-header">
+                    <span class="insight-title">AI Insights</span>
+                    <span class="status-pill" id="status-pill"><span class="dot"></span>Establishing Baseline</span>
+                </div>
+                <div class="insight-bubble" id="ai-insight-text">Collecting the first readings to learn baby's personal baseline...</div>
+                <div class="insight-sub" id="ai-forecast-text"></div>
+                <div class="ai-source-tag" id="ai-source-tag" style="margin-top:10px;"></div>
+            </div>
+            <div class="safety-banner">
+                <span>🔔</span>
+                <span><b>Not a medical device.</b> These are heuristic pattern flags from a hackathon prototype, not a diagnosis. Always use a certified baby monitor and consult a pediatrician for real health concerns. If you believe your baby is in danger, contact emergency services immediately.</span>
+            </div>
+        </section>
+
+        <section class="tab-panel" id="tab-history">
+            <div class="history-stats">
+                <div class="history-stat-card"><div class="hs-label">Heart Rate</div><div class="hs-row"><span>Min</span><b id="hist-hr-min">--</b></div><div class="hs-row"><span>Avg</span><b id="hist-hr-avg">--</b></div><div class="hs-row"><span>Max</span><b id="hist-hr-max">--</b></div></div>
+                <div class="history-stat-card"><div class="hs-label">Breathing</div><div class="hs-row"><span>Min</span><b id="hist-br-min">--</b></div><div class="hs-row"><span>Avg</span><b id="hist-br-avg">--</b></div><div class="hs-row"><span>Max</span><b id="hist-br-max">--</b></div></div>
+            </div>
+            <div class="event-log-card">
+                <div class="event-log-title">Timeline</div>
+                <ul class="event-log" id="event-log"></ul>
+            </div>
+        </section>
+
+        <nav class="bottom-tabs">
+            <button class="tab-btn active" data-tab="tab-home">Home</button>
+            <button class="tab-btn" data-tab="tab-insights">Insights</button>
+            <button class="tab-btn" data-tab="tab-history">History</button>
+        </nav>
+    </div>
+
+    <script>
+        const socket = io();
+
+        document.getElementById('mode-toggle').addEventListener('click', () => {
+            document.body.classList.toggle('day');
+            document.getElementById('mode-toggle').innerText = document.body.classList.contains('day') ? '🌙' : '☀️';
+        });
+
+        let voiceEnabled = true;
+        const voiceToggle = document.getElementById('voice-toggle');
+        voiceToggle.addEventListener('click', () => {
+            voiceEnabled = !voiceEnabled;
+            voiceToggle.innerText = voiceEnabled ? '🔊' : '🔇';
+            if (!voiceEnabled) window.speechSynthesis.cancel();
+        });
+        let lastVoiceAt = 0;
+        function speak(text) {
+            if (!voiceEnabled || !('speechSynthesis' in window)) return;
+            const now = Date.now();
+            if (now - lastVoiceAt < 45000) return;
+            lastVoiceAt = now;
+            window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+        }
+
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+                btn.classList.add('active');
+                document.getElementById(btn.dataset.tab).classList.add('active');
+            });
+        });
+
+        const HR_ALPHA = 0.25, BR_ALPHA = 0.3, AI_ALPHA = 0.2;
+        let hrSmoothed = 72, brSmoothed = 16, aiSmoothed = 0;
+        const hrData = new Array(50).fill(72);
+        const brData = new Array(50).fill(16);
+        const hrStats = { min: null, max: null, sum: 0, count: 0 };
+        const brStats = { min: null, max: null, sum: 0, count: 0 };
+        const sessionStart = Date.now();
+
+        const INFANT_HR_LOW = 70, INFANT_HR_HIGH = 190;
+        const INFANT_BR_LOW = 20, INFANT_BR_HIGH = 65;
+        const INCLINE_SAFE_MAX = 10;
+        const SUSTAIN_SAMPLES = 5;
+        const CALIBRATION_SAMPLES = 20;
+
+        let baseline = { hr: null, br: null };
+        let calibHR = [], calibBR = [];
+        let hrFlagStreak = 0, brFlagStreak = 0, distressStreak = 0;
+        let currentStatus = 'calibrating';
+        let latestWellnessSummary = null;
+
+        function updateStats(stats, value) {
+            stats.min = stats.min === null ? value : Math.min(stats.min, value);
+            stats.max = stats.max === null ? value : Math.max(stats.max, value);
+            stats.sum += value; stats.count += 1;
+        }
+        function renderStats(prefix, stats) {
+            document.getElementById(prefix + '-min').innerText = stats.min !== null ? Math.round(stats.min) : '--';
+            document.getElementById(prefix + '-max').innerText = stats.max !== null ? Math.round(stats.max) : '--';
+            document.getElementById(prefix + '-avg').innerText = stats.count > 0 ? Math.round(stats.sum / stats.count) : '--';
+            const hMin = document.getElementById('hist-' + prefix + '-min'), hAvg = document.getElementById('hist-' + prefix + '-avg'), hMax = document.getElementById('hist-' + prefix + '-max');
+            if (hMin) hMin.innerText = stats.min !== null ? Math.round(stats.min) : '--';
+            if (hAvg) hAvg.innerText = stats.count > 0 ? Math.round(stats.sum / stats.count) : '--';
+            if (hMax) hMax.innerText = stats.max !== null ? Math.round(stats.max) : '--';
+        }
+        function renderTrend(elId, dataArray) {
+            const el = document.getElementById(elId);
+            if (dataArray.length < 8) { el.innerText = '--'; return; }
+            const delta = dataArray[dataArray.length - 1] - dataArray[dataArray.length - 8];
+            el.classList.remove('trend-up', 'trend-down');
+            if (delta > 1.2) { el.innerText = '▲'; el.classList.add('trend-up'); }
+            else if (delta < -1.2) { el.innerText = '▼'; el.classList.add('trend-down'); }
+            else { el.innerText = '–'; }
+        }
+        function formatElapsed(ms) {
+            const s = Math.floor(ms / 1000);
+            return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+        }
+        setInterval(() => { document.getElementById('elapsed-sub').innerText = 'SESSION ' + formatElapsed(Date.now() - sessionStart); }, 1000);
+
+        function drawChart(canvasId, dataArray, strokeColor) {
+            const canvas = document.getElementById(canvasId);
+            const ctx = canvas.getContext('2d');
+            canvas.width = canvas.offsetWidth; canvas.height = canvas.offsetHeight;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.beginPath(); ctx.lineWidth = 2.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = strokeColor;
+            const step = canvas.width / (dataArray.length - 1);
+            const minVal = Math.min(...dataArray) - 2, maxVal = Math.max(...dataArray) + 2, range = maxVal - minVal || 1;
+            for (let i = 0; i < dataArray.length; i++) {
+                const x = i * step;
+                const y = canvas.height - ((dataArray[i] - minVal) / range * canvas.height * 0.7 + (canvas.height * 0.15));
+                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+        }
+
+        function logEvent(message, level) {
+            const log = document.getElementById('event-log');
+            const li = document.createElement('li');
+            li.className = 'ev-' + (level || 'info');
+            const t = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            li.innerHTML = '<span class="t">' + t + '</span>' + message;
+            log.insertBefore(li, log.firstChild);
+            while (log.children.length > 30) log.removeChild(log.lastChild);
+        }
+
+        function setStatusPill(level, label) {
+            const pill = document.getElementById('status-pill');
+            pill.className = 'status-pill ' + level;
+            pill.innerHTML = '<span class="dot" style="width:7px;height:7px;border-radius:50%;background:currentColor;display:inline-block;"></span>' + label;
+            const heroPill = document.getElementById('hero-status-pill');
+            heroPill.className = 'hero-status-pill status-pill ' + level;
+            document.getElementById('hero-status-text').innerText = label;
+        }
+
+        let positionStatus = 'normal', inclineStatus = 'normal', currentPosition = null;
+
+        function runAssessment(hr, br) {
+            if (!baseline.hr || !baseline.br) {
+                calibHR.push(hr); calibBR.push(br);
+                document.getElementById('ai-insight-text').innerText = 'Learning baby\'s personal baseline (' + calibHR.length + '/' + CALIBRATION_SAMPLES + ')...';
+                if (calibHR.length >= CALIBRATION_SAMPLES) {
+                    baseline.hr = calibHR.reduce((a, b) => a + b, 0) / calibHR.length;
+                    baseline.br = calibBR.reduce((a, b) => a + b, 0) / calibBR.length;
+                    logEvent('Baseline established: ' + Math.round(baseline.hr) + ' bpm / ' + Math.round(baseline.br) + ' brpm', 'info');
+                }
+                return;
+            }
+
+            const hrOutOfRange = hr < INFANT_HR_LOW || hr > INFANT_HR_HIGH;
+            const brOutOfRange = br < INFANT_BR_LOW || br > INFANT_BR_HIGH;
+            const hrBaselineShift = Math.abs(hr - baseline.hr) > 20;
+            const brBaselineShift = Math.abs(br - baseline.br) > 12;
+            hrFlagStreak = (hrOutOfRange || hrBaselineShift) ? hrFlagStreak + 1 : 0;
+            brFlagStreak = (brOutOfRange || brBaselineShift) ? brFlagStreak + 1 : 0;
+            const hrSustained = hrFlagStreak >= SUSTAIN_SAMPLES;
+            const brSustained = brFlagStreak >= SUSTAIN_SAMPLES;
+            const distressSustained = aiSmoothed > 55 && distressStreak >= SUSTAIN_SAMPLES;
+
+            document.getElementById('hr-card').classList.toggle('flagged', hrSustained);
+            document.getElementById('br-card').classList.toggle('flagged', brSustained);
+
+            let newStatus, insight;
+            if (inclineStatus === 'attention') {
+                newStatus = 'attention';
+                insight = 'The mattress incline sensor is reading above the usual flat-sleep guidance. Worth checking the sleep surface setup.';
+                speak('Heads up. The mattress incline looks unusually high.');
+            } else if (positionStatus === 'attention') {
+                newStatus = 'attention';
+                insight = 'Baby appears to be on their stomach for a while. Back-to-sleep is the general guideline — worth a check.';
+                speak('Heads up. Baby appears to be on their stomach.');
+            } else if (hrOutOfRange || brOutOfRange) {
+                newStatus = 'attention';
+                let which = hrOutOfRange && brOutOfRange ? 'Heart rate and breathing rate are' : hrOutOfRange ? 'Heart rate is' : 'Breathing rate is';
+                insight = which + ' outside the typical infant reference range (' + Math.round(hr) + ' bpm, ' + Math.round(br) + ' brpm). Pattern flag, not a diagnosis — go check on baby.';
+                if (hrSustained || brSustained) logEvent('Sustained out-of-range reading', 'attention');
+                speak('Heads up. Vitals are outside the expected range.');
+            } else if (hrBaselineShift || brBaselineShift || distressSustained) {
+                newStatus = 'minor';
+                insight = 'Readings have drifted from baby\'s baseline. Worth a glance — small drifts are common during normal movement.';
+                if (hrBaselineShift || brBaselineShift) logEvent('Deviation from personal baseline', 'minor');
+            } else {
+                newStatus = 'normal';
+                insight = latestWellnessSummary || ('Heart rate (' + Math.round(hr) + ' bpm) and breathing (' + Math.round(br) + ' brpm) look typical.');
+            }
+
+            if (newStatus !== currentStatus) {
+                const labels = { normal: ['normal', 'All Good'], minor: ['minor', 'Minor Irregularity'], attention: ['attention', 'Check On Baby'] };
+                setStatusPill(labels[newStatus][0], labels[newStatus][1]);
+                currentStatus = newStatus;
+            }
+            if (newStatus === 'normal' && latestWellnessSummary) insight = latestWellnessSummary;
+            document.getElementById('ai-insight-text').innerText = insight;
+        }
+
+            // Enhanced AI payload parser targeting predictive analytics
+        socket.on('wellness_update', function(data) {
+            const sourceLabels = { gemini: '✨ Gemini Pediatric Model v2', heuristic: '⚙️ Rule-based fallback' };
+            document.getElementById('ai-source-tag').innerText = sourceLabels[data.source] || '';
+            
+            // 1. Core Synthesis (What is happening behaviorally)
+            if (data.summary) {
+                document.getElementById('ai-insight-text').innerText = data.summary;
+            }
+            
+            // 2. Predictive Trend Forecast (What the AI projects next)
+            const forecastEl = document.getElementById('ai-forecast-text');
+            if (data.forecast) {
+                forecastEl.style.display = 'block';
+                forecastEl.innerHTML = `<strong>AI Trend Forecast:</strong> ${data.forecast}`;
+            } else {
+                forecastEl.style.display = 'none';
+            }
+
+            // 3. Biometric Correlatives Grid (Breaking down the "Why")
+            const subEl = document.getElementById('ai-source-tag').previousElementSibling; 
+            if (data.correlatives && subEl && subEl.classList.contains('insight-sub')) {
+                subEl.innerHTML = `
+                    <span>State: ${data.correlatives.sleep_state || '--'}</span>
+                    <span>Est. Wake Risk: ${data.correlatives.wake_risk || '--'}</span>
+                    <span>Vitals Drift: ${data.correlatives.vitals_drift || '--'}</span>
+                    <span>Autonomic: ${data.correlatives.autonomic_tone || '--'}</span>
+                `;
+            }
+        });
+
+        socket.on('vitals_update', function(data) {
+            hrSmoothed = HR_ALPHA * data.heart_rate + (1 - HR_ALPHA) * hrSmoothed;
+            brSmoothed = BR_ALPHA * data.breathing_rate + (1 - BR_ALPHA) * brSmoothed;
+
+            document.getElementById('hr-val').innerText = Math.round(hrSmoothed);
+            document.getElementById('br-val').innerText = Math.round(brSmoothed);
+            document.getElementById('hr-val-echo').innerText = Math.round(hrSmoothed);
+            document.getElementById('br-val-echo').innerText = Math.round(brSmoothed);
+
+            hrData.push(hrSmoothed); hrData.shift();
+            brData.push(brSmoothed); brData.shift();
+
+            updateStats(hrStats, data.heart_rate);
+            updateStats(brStats, data.breathing_rate);
+            renderStats('hr', hrStats);
+            renderStats('br', brStats);
+            renderTrend('hr-trend', hrData);
+            renderTrend('br-trend', brData);
+            drawChart('hr-chart', hrData, '#FF6FA0');
+            drawChart('br-chart', brData, '#5FD0F3');
+
+            const alertBox = document.getElementById('alert-box');
+            const statusTag = document.getElementById('status-tag');
+            if (data.status === 'DISCONNECTED') {
+                alertBox.innerText = "SIGNAL LOST"; alertBox.classList.add('alert-active');
+                statusTag.innerText = "Signal Loss"; statusTag.style.background = "rgba(255,92,122,0.9)";
+                logEvent('Signal dropped out', 'attention');
+            } else {
+                alertBox.innerText = "QNX LINK: STEADY"; alertBox.classList.remove('alert-active');
+                statusTag.innerText = "System Active"; statusTag.style.background = "rgba(76,217,166,0.9)";
+            }
+
+            runAssessment(Math.round(hrSmoothed), Math.round(brSmoothed));
+        });
+
+        const POSITION_SUSTAIN_MS = 15000;
+        const INCLINE_SUSTAIN_MS = 10000;
+        let positionSince = Date.now();
+        let stomachSince = null, inclineSince = null;
+
+        function classifyPosition(roll) {
+            const norm = Math.abs(((roll % 360) + 360) % 360);
+            const folded = norm > 180 ? 360 - norm : norm;
+            if (folded < 35) return 'back';
+            if (folded > 145) return 'stomach';
+            return 'side';
+        }
+        function updatePositionTimer() {
+            document.getElementById('position-time').innerText = formatElapsed(Date.now() - positionSince) + ' in position';
+        }
+        setInterval(updatePositionTimer, 1000);
+
+        socket.on('orientation_update', function(data) {
+            const roll = data.roll, pitch = data.pitch;
+            const now = Date.now();
+            const position = classifyPosition(roll);
+            const label = document.getElementById('position-label');
+            const card = document.getElementById('position-card');
+
+            if (position !== currentPosition) {
+                currentPosition = position; positionSince = now;
+                logEvent('Position changed to ' + position, 'info');
+                if (position !== 'stomach') stomachSince = null;
+            }
+            if (position === 'back') label.innerText = 'Back';
+            else if (position === 'side') label.innerText = 'Side';
+            else label.innerText = 'Stomach ⚠️';
+
+            if (position === 'stomach') {
+                if (!stomachSince) stomachSince = now;
+                positionStatus = (now - stomachSince >= POSITION_SUSTAIN_MS) ? 'attention' : 'normal';
+            } else { positionStatus = 'normal'; }
+
+            const incline = Math.abs(pitch);
+            document.getElementById('incline-val').innerText = incline.toFixed(1) + '°';
+            const bar = document.getElementById('incline-bar');
+            const pct = Math.min(100, (incline / 20) * 100);
+            bar.style.width = pct + '%';
+            bar.style.background = incline > INCLINE_SAFE_MAX ? 'var(--coral)' : incline > INCLINE_SAFE_MAX * 0.6 ? 'var(--amber)' : 'var(--mint)';
+
+            if (incline > INCLINE_SAFE_MAX) {
+                if (!inclineSince) inclineSince = now;
+                inclineStatus = (now - inclineSince >= INCLINE_SUSTAIN_MS) ? 'attention' : 'normal';
+            } else { inclineSince = null; inclineStatus = 'normal'; }
+
+            card.classList.toggle('flagged', positionStatus === 'attention' || inclineStatus === 'attention');
+            document.getElementById('position-badge').innerText = (positionStatus === 'attention' || inclineStatus === 'attention') ? 'check needed' : 'tracking';
+        });
+
+        async function initFaceAI() {
+            const badge = document.getElementById('ai-face-tag');
+            try {
+                const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
+                await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+                await faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL);
+                badge.innerText = 'AI: Active';
+                runFaceLoop();
+            } catch (err) {
+                badge.innerText = 'AI: Offline';
+                document.getElementById('ai-stress-label').innerText = 'module offline';
+            }
+        }
+        function runFaceLoop() {
+            const img = document.getElementById('video-feed-img');
+            const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.4 });
+            setInterval(async () => {
+                try {
+                    const result = await faceapi.detectSingleFace(img, options).withFaceExpressions();
+                    if (!result) {
+                        document.getElementById('ai-stress-label').innerText = 'no face';
+                        document.getElementById('mood-emoji').innerText ;
+                        distressStreak = 0;
+                        return;
+                    }
+                    const exp = result.expressions;
+                    const tension = (exp.fearful + exp.angry + exp.sad + exp.disgusted + exp.surprised * 0.5);
+                    const rawScore = Math.min(100, Math.round(tension * 100));
+                    aiSmoothed = AI_ALPHA * rawScore + (1 - AI_ALPHA) * aiSmoothed;
+                    const displayScore = Math.round(aiSmoothed);
+                    distressStreak = displayScore > 55 ? distressStreak + 1 : 0;
+                    document.getElementById('ai-bar-fill').style.width = displayScore + '%';
+                    const label = document.getElementById('ai-stress-label');
+                    const emoji = document.getElementById('mood-emoji');
+                    if (displayScore < 25) { label.innerText = 'settled';}
+                    else if (displayScore < 55) { label.innerText = 'fussy'; }
+                    else { label.innerText = 'possible distress'; }
+                } catch (err) { /* fail silently per-frame */ }
+            }, 1800);
+        }
+        initFaceAI();
+    </script>
+</body>
+</html>
